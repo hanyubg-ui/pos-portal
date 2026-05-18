@@ -330,15 +330,14 @@ def load_pos_data(filepath: str | Path) -> pd.DataFrame:
     if _is_ainz_format(df):
         df = _convert_ainz_format(df, p)
     # ロフト生データ形式を自動検出・変換
-    # ヘッダーなしCSVのため、先頭行をデータとして含めるよう header=None で再読み込み
+    # ヘッダーなしCSVはpandasが先頭データ行を列名として読む
+    # → 列名を先頭行として戻し、整数インデックスで再構築してから変換
     elif _is_loft_raw_format(df):
-        if p.suffix.lower() == ".csv":
-            for enc in ("cp932", "utf-8-sig", "utf-8"):
-                try:
-                    df = pd.read_csv(p, dtype=str, encoding=enc, header=None)
-                    break
-                except UnicodeDecodeError:
-                    continue
+        header_row = pd.DataFrame([df.columns.tolist()],
+                                   columns=range(len(df.columns)))
+        body = df.copy()
+        body.columns = range(len(body.columns))
+        df = pd.concat([header_row, body], ignore_index=True)
         df = _convert_loft_format(df)
     # PLAZAの生データ形式を自動検出・変換
     elif _is_plaza_raw_format(df):

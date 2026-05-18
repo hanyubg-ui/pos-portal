@@ -7,6 +7,7 @@ app.py — POS売上分析ポータル ホーム画面
 
 import streamlit as st
 
+from auth import check_password
 from pos_db import get_summary, load_filtered
 from pos_analysis import RETAILER_CONFIG
 
@@ -16,6 +17,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+if not check_password():
+    st.stop()
 
 st.markdown("""
 <style>

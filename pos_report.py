@@ -219,6 +219,40 @@ def _convert_loft_format(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def _is_cosme_format(df: pd.DataFrame) -> bool:
+    """アットコスメ形式（売上日付・品名・売上数 列を持つ）かどうかを判定する"""
+    return "売上日付" in df.columns and "品名" in df.columns and "売上数" in df.columns
+
+
+def _convert_cosme_format(df: pd.DataFrame) -> pd.DataFrame:
+    """アットコスメの生データを標準縦形式に変換する"""
+    import unicodedata
+
+    df = df.copy()
+
+    def norm(s):
+        return unicodedata.normalize("NFKC", str(s).strip())
+
+    product_names = df["品名"].apply(norm)
+    brands = product_names.apply(_detect_brand)
+
+    # ブランド不明の場合はメーカー名を使う
+    if "メーカー名" in df.columns:
+        maker = df["メーカー名"].apply(norm)
+        brands = brands.where(brands != "（不明）", maker)
+
+    result = pd.DataFrame({
+        "日付":     df["売上日付"].apply(lambda x: str(x).strip()),
+        "小売店名": "アットコスメ",
+        "店舗名":   df["店舗名称"].apply(norm) if "店舗名称" in df.columns else "不明",
+        "ブランド名": brands,
+        "商品名":   product_names,
+        "売上数量": pd.to_numeric(df["売上数"], errors="coerce").fillna(0).astype(int),
+        "売上金額": pd.to_numeric(df["売上金額"], errors="coerce").fillna(0).astype(int),
+    })
+    return result[result["売上数量"] > 0].reset_index(drop=True)
+
+
 def _is_plaza_raw_format(df: pd.DataFrame) -> bool:
     """PLAZAの生データ形式（日別横並び）かどうかを判定する"""
     return "データ更新年月日" in df.columns and "２８日間売数" in df.columns

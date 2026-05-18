@@ -43,6 +43,7 @@ def _load_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
         _is_ainz_format, _convert_ainz_format,
         _is_loft_raw_format, _convert_loft_format,
         _is_plaza_raw_format, _convert_plaza_format,
+        _is_cosme_format, _convert_cosme_format,
         REQUIRED_COLS,
     )
 
@@ -56,6 +57,8 @@ def _load_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
         df.columns = [str(c).strip() for c in df.columns]
         if _is_ainz_format(df):
             df = _convert_ainz_format(df, Path(filename))
+        elif _is_cosme_format(df):
+            df = _convert_cosme_format(df)
         elif _is_plaza_raw_format(df):
             df = _convert_plaza_format(df)
 

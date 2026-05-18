@@ -38,17 +38,59 @@ RETAILER_CONFIG: dict[str, dict] = {
 # ─── ユーティリティ ──────────────────────────────────────────────────
 
 def _load_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
-    suffix = Path(filename).suffix
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as f:
-        f.write(file_bytes)
-        path = f.name
-    try:
-        return load_pos_data(path)
-    finally:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+    import io as _io
+    from pos_report import (
+        _is_ainz_format, _convert_ainz_format,
+        _is_loft_raw_format, _convert_loft_format,
+        _is_plaza_raw_format, _convert_plaza_format,
+        REQUIRED_COLS,
+    )
+
+    suffix = Path(filename).suffix.lower()
+
+    if suffix in (".xlsx", ".xls"):
+        df = pd.read_excel(_io.BytesIO(file_bytes), dtype=str)
+    elif suffix == ".csv":
+        for enc in ("cp932", "utf-8-sig", "utf-8"):
+            try:
+                df = pd.read_csv(_io.BytesIO(file_bytes), dtype=str, encoding=enc)
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            raise ValueError(f"文字コードの自動判定に失敗しました: {filename}")
+    else:
+        raise ValueError(f"未対応のファイル形式: {suffix}（.xlsx / .xls / .csv のみ対応）")
+
+    df.columns = df.columns.str.strip()
+
+    if _is_ainz_format(df):
+        df = _convert_ainz_format(df, Path(filename))
+    elif _is_loft_raw_format(df):
+        header_row = pd.DataFrame([df.columns.tolist()], columns=range(len(df.columns)))
+        body = df.copy()
+        body.columns = range(len(body.columns))
+        df = pd.concat([header_row, body], ignore_index=True)
+        df = _convert_loft_format(df)
+    elif _is_plaza_raw_format(df):
+        df = _convert_plaza_format(df)
+
+    missing = REQUIRED_COLS - set(df.columns)
+    if missing:
+        raise ValueError(
+            f"必須カラムが見つかりません: {sorted(missing)}\n実際のカラム: {list(df.columns)}"
+        )
+
+    df["日付"] = pd.to_datetime(df["日付"], errors="coerce")
+    df = df.dropna(subset=["日付"])
+    df["売上数量"] = pd.to_numeric(df["売上数量"], errors="coerce").fillna(0).astype(int)
+    if "売上金額" not in df.columns:
+        df["売上金額"] = 0
+    df["売上金額"] = pd.to_numeric(df["売上金額"], errors="coerce").fillna(0).astype(int)
+    for col in ("小売店名", "店舗名", "ブランド名", "商品名"):
+        df[col] = df[col].astype(str).str.strip().replace("nan", "（不明）").fillna("（不明）")
+
+    return df
 
 
 @st.cache_data(ttl=5, show_spinner=False)

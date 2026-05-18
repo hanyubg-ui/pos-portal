@@ -80,7 +80,7 @@ PAGE_MAP   = {
     "アットコスメ": "pages/5_Cosme.py",
 }
 
-cols = st.columns(4, gap="large")
+cols = st.columns(len(RETAILERS), gap="medium")
 
 for col, retailer in zip(cols, RETAILERS):
     cfg   = RETAILER_CONFIG[retailer]

@@ -60,21 +60,24 @@ def _load_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
             df = _convert_plaza_format(df)
 
     elif suffix == ".csv":
-        # 文字列にデコードしてから StringIO で読む（CR改行・BytesIO問題を回避）
+        # csv.reader で直接パース（pandas の EmptyDataError を完全回避）
+        import csv as _csv
+        text = None
         for enc in ("cp932", "utf-8-sig", "utf-8", "euc-jp"):
             try:
                 text = file_bytes.decode(enc)
-                # CR のみの改行を LF に正規化
-                text = text.replace("\r\n", "\n").replace("\r", "\n")
-                df_raw = pd.read_csv(_io.StringIO(text), dtype=str, header=None)
                 break
             except (UnicodeDecodeError, UnicodeError):
                 continue
-        else:
-            raise ValueError(
-                f"文字コードの自動判定に失敗しました: {filename}\n"
-                f"先頭バイト: {file_bytes[:16].hex()}"
-            )
+        if text is None:
+            text = file_bytes.decode("cp932", errors="replace")
+        # CR のみ / CRLF を LF に正規化
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        rows = list(_csv.reader(_io.StringIO(text)))
+        rows = [r for r in rows if any(c.strip() for c in r)]  # 空行除去
+        if not rows:
+            raise ValueError(f"ファイルにデータがありません: {filename}")
+        df_raw = pd.DataFrame(rows)
 
         if df_raw.empty:
             raise ValueError(f"ファイルにデータがありません: {filename}")

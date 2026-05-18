@@ -60,17 +60,21 @@ def _load_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
             df = _convert_plaza_format(df)
 
     elif suffix == ".csv":
+        # 先頭バイトをデバッグ表示用に保持
+        _head_hex = file_bytes[:16].hex()
         # header=None で読むことで headerless CSV（ロフト等）の EmptyDataError を回避
-        for enc in ("cp932", "utf-8-sig", "utf-8"):
+        for enc in ("cp932", "utf-8-sig", "utf-8", "utf-16", "euc-jp", "iso-2022-jp"):
             try:
                 df_raw = pd.read_csv(
                     _io.BytesIO(file_bytes), dtype=str, encoding=enc, header=None
                 )
                 break
-            except UnicodeDecodeError:
+            except (UnicodeDecodeError, UnicodeError):
                 continue
         else:
-            raise ValueError(f"文字コードの自動判定に失敗しました: {filename}")
+            raise ValueError(
+                f"文字コードの自動判定に失敗しました: {filename}\n先頭バイト: {_head_hex}"
+            )
 
         if df_raw.empty:
             raise ValueError(f"ファイルにデータがありません: {filename}")
@@ -214,7 +218,8 @@ def render_retailer_page(retailer_name: str) -> None:
                             )
                         st.rerun()
                     except Exception as e:
-                        st.error(f"エラー [{len(file_bytes):,}bytes]: {e}")
+                        head_hex = file_bytes[:16].hex() if file_bytes else "empty"
+                        st.error(f"エラー [{len(file_bytes):,}bytes, head={head_hex}]: {e}")
 
         # サンプルデータ
         with st.expander("🔽 サンプルデータで試す"):

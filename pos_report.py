@@ -157,62 +157,81 @@ def _is_plaza_raw_format(df: pd.DataFrame) -> bool:
 
 
 def _convert_plaza_format(df: pd.DataFrame) -> pd.DataFrame:
-    """PLAZAの生データ（日別横並び）を標準縦形式に変換する"""
+    """PLAZAの生データを標準縦形式に変換する。
+    Excel形式（X月Y日列）とCSV形式（売上数N日前列）の両方に対応。"""
     import unicodedata
 
     df = df.copy()
 
-    # 年を取得（データ更新年月日: YYYYMMDD）
-    year = int(str(df["データ更新年月日"].dropna().iloc[0])[:4])
+    report_date_str = str(df["データ更新年月日"].dropna().iloc[0]).strip()[:8]
+    report_date = pd.to_datetime(report_date_str, format="%Y%m%d")
+    year = report_date.year
 
-    # 日別列を特定（例: "4月28日"）
-    day_col_re = re.compile(r'^(\d+)月(\d+)日$')
-    day_cols = [c for c in df.columns if day_col_re.match(str(c).strip())]
+    def _norm(s):
+        return unicodedata.normalize("NFKC", str(s).strip())
 
-    if not day_cols:
-        raise ValueError("日別列（例: 4月1日）が見つかりません。")
+    # パターンA: Excel形式 "4月1日"
+    re_a = re.compile(r'^(\d+)月(\d+)日$')
+    day_cols_a = [c for c in df.columns if re_a.match(str(c).strip())]
 
-    # 単価を計算（28日間売上金額 ÷ 28日間売数）
-    qty_total = pd.to_numeric(df["２８日間売数"], errors="coerce").fillna(0)
-    amt_total = pd.to_numeric(df["２８日間売上金額"], errors="coerce").fillna(0)
-    df["_unit_price"] = 0
-    mask = qty_total > 0
-    df.loc[mask, "_unit_price"] = (amt_total[mask] / qty_total[mask]).round(0).astype(int)
+    # パターンB: CSV形式 "売上数１日前"（全角数字を正規化して判定）
+    re_b = re.compile(r'^売上数(\d+)日前$')
+    day_cols_b = [c for c in df.columns if re_b.match(_norm(c))]
 
-    # wide → long に変換
-    id_cols = ["店舗名", "商品名", "_unit_price"]
-    melted = df[id_cols + day_cols].melt(
-        id_vars=id_cols,
-        value_vars=day_cols,
-        var_name="_date_str",
-        value_name="売上数量",
-    )
+    if day_cols_a:
+        day_cols = day_cols_a
+        qty28 = pd.to_numeric(df["２８日間売数"], errors="coerce").fillna(0)
+        amt28 = pd.to_numeric(df["２８日間売上金額"], errors="coerce").fillna(0)
+        df["_unit_price"] = 0
+        mask = qty28 > 0
+        df.loc[mask, "_unit_price"] = (amt28[mask] / qty28[mask]).round(0).astype(int)
 
-    # 数量 0 の行は除外
+        melted = df[["店舗名", "商品名", "_unit_price"] + day_cols].melt(
+            id_vars=["店舗名", "商品名", "_unit_price"],
+            value_vars=day_cols, var_name="_date_str", value_name="売上数量",
+        )
+        def _parse_a(s):
+            m = re_a.match(str(s).strip())
+            return f"{year}-{int(m.group(1)):02d}-{int(m.group(2)):02d}" if m else None
+        melted["日付"] = melted["_date_str"].apply(_parse_a)
+        melted["売上金額"] = (melted["売上数量"].apply(
+            lambda x: pd.to_numeric(x, errors="coerce") or 0) * melted["_unit_price"]).astype(int)
+
+    elif day_cols_b:
+        day_cols = day_cols_b
+        if "上代単価" in df.columns:
+            df["_unit_price"] = pd.to_numeric(df["上代単価"], errors="coerce").fillna(0).astype(int)
+        else:
+            qty28 = pd.to_numeric(df["２８日間売数"], errors="coerce").fillna(0)
+            amt28 = pd.to_numeric(df["２８日間売上金額"], errors="coerce").fillna(0)
+            df["_unit_price"] = 0
+            mask = qty28 > 0
+            df.loc[mask, "_unit_price"] = (amt28[mask] / qty28[mask]).round(0).astype(int)
+
+        melted = df[["店舗名", "商品名", "_unit_price"] + day_cols].melt(
+            id_vars=["店舗名", "商品名", "_unit_price"],
+            value_vars=day_cols, var_name="_date_str", value_name="売上数量",
+        )
+        def _parse_b(s):
+            m = re_b.match(_norm(s))
+            if m:
+                n = int(m.group(1))
+                return (report_date - pd.Timedelta(days=n - 1)).strftime("%Y-%m-%d")
+            return None
+        melted["日付"] = melted["_date_str"].apply(_parse_b)
+        melted["売上金額"] = (
+            pd.to_numeric(melted["売上数量"], errors="coerce").fillna(0) * melted["_unit_price"]
+        ).astype(int)
+
+    else:
+        raise ValueError("日別列（'4月1日' または '売上数N日前' 形式）が見つかりません。")
+
     melted["売上数量"] = pd.to_numeric(melted["売上数量"], errors="coerce").fillna(0).astype(int)
-    melted = melted[melted["売上数量"] > 0].copy()
-
-    # 日付を YYYY-MM-DD に変換
-    def _parse_date(s: str) -> str | None:
-        m = day_col_re.match(str(s).strip())
-        if m:
-            mo, day = int(m.group(1)), int(m.group(2))
-            return f"{year}-{mo:02d}-{day:02d}"
-        return None
-
-    melted["日付"] = melted["_date_str"].apply(_parse_date)
-    melted = melted.dropna(subset=["日付"])
-
-    # 売上金額を計算
-    melted["売上金額"] = (melted["売上数量"] * melted["_unit_price"]).astype(int)
-
-    # 商品名を半角→全角カナに変換してブランドを抽出
-    melted["商品名"] = melted["商品名"].apply(
-        lambda x: unicodedata.normalize("NFKC", str(x)).strip()
-    )
+    melted = melted[melted["売上数量"] > 0].dropna(subset=["日付"]).copy()
+    melted["商品名"]     = melted["商品名"].apply(lambda x: _norm(x))
     melted["ブランド名"] = melted["商品名"].apply(_detect_brand)
     melted["小売店名"]   = "PLAZA"
-    melted["店舗名"]     = melted["店舗名"].astype(str).str.strip()
+    melted["店舗名"]     = melted["店舗名"].apply(lambda x: _norm(x))
 
     return melted[["日付", "小売店名", "店舗名", "ブランド名", "商品名", "売上数量", "売上金額"]].reset_index(drop=True)
 

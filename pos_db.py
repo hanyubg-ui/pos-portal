@@ -66,7 +66,12 @@ def _gh_headers(cfg: dict) -> dict:
 
 def _parse_gh_csv(content: str) -> pd.DataFrame:
     """GitHub から取得した CSV 文字列を DataFrame に変換する"""
-    df = pd.read_csv(io.StringIO(content))
+    if not content.strip():
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(io.StringIO(content))
+    except Exception:
+        return pd.DataFrame()
     if not df.empty and "日付" in df.columns:
         df["日付"] = pd.to_datetime(df["日付"], errors="coerce")
         df = df.dropna(subset=["日付"])

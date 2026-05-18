@@ -193,11 +193,14 @@ def render_retailer_page(retailer_name: str) -> None:
         )
 
         if uploaded is not None:
+            st.caption(f"📎 {uploaded.name}  ({uploaded.size:,} bytes) [v4]")
             if st.button("💾 DBに保存する", type="primary",
                          use_container_width=True, key=f"save_{retailer_name}"):
                 with st.spinner("保存中…"):
                     try:
-                        df_up = _load_file(uploaded.getvalue(), uploaded.name)
+                        uploaded.seek(0)
+                        file_bytes = uploaded.read()
+                        df_up = _load_file(file_bytes, uploaded.name)
                         # このページの小売店に該当するデータのみ件数を表示
                         df_this = df_up[df_up["小売店名"] == retailer_name]
                         result  = save_records(df_up)
@@ -211,7 +214,7 @@ def render_retailer_page(retailer_name: str) -> None:
                             )
                         st.rerun()
                     except Exception as e:
-                        st.error(f"エラー: {e}")
+                        st.error(f"エラー [{len(file_bytes):,}bytes]: {e}")
 
         # サンプルデータ
         with st.expander("🔽 サンプルデータで試す"):

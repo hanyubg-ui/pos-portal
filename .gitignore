@@ -1,0 +1,9 @@
+pos_data.db
+*.db
+__pycache__/
+*.pyc
+.env
+index.b64
+server.ps1
+index.html
+.claude/

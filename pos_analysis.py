@@ -60,20 +60,20 @@ def _load_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
             df = _convert_plaza_format(df)
 
     elif suffix == ".csv":
-        # 先頭バイトをデバッグ表示用に保持
-        _head_hex = file_bytes[:16].hex()
-        # header=None で読むことで headerless CSV（ロフト等）の EmptyDataError を回避
-        for enc in ("cp932", "utf-8-sig", "utf-8", "utf-16", "euc-jp", "iso-2022-jp"):
+        # 文字列にデコードしてから StringIO で読む（CR改行・BytesIO問題を回避）
+        for enc in ("cp932", "utf-8-sig", "utf-8", "euc-jp"):
             try:
-                df_raw = pd.read_csv(
-                    _io.BytesIO(file_bytes), dtype=str, encoding=enc, header=None
-                )
+                text = file_bytes.decode(enc)
+                # CR のみの改行を LF に正規化
+                text = text.replace("\r\n", "\n").replace("\r", "\n")
+                df_raw = pd.read_csv(_io.StringIO(text), dtype=str, header=None)
                 break
             except (UnicodeDecodeError, UnicodeError):
                 continue
         else:
             raise ValueError(
-                f"文字コードの自動判定に失敗しました: {filename}\n先頭バイト: {_head_hex}"
+                f"文字コードの自動判定に失敗しました: {filename}\n"
+                f"先頭バイト: {file_bytes[:16].hex()}"
             )
 
         if df_raw.empty:

@@ -155,17 +155,13 @@ def _convert_ainz_format(df: pd.DataFrame, filepath: "Path") -> pd.DataFrame:
 
 
 def _is_loft_raw_format(df: pd.DataFrame) -> bool:
-    """ロフトの生データ形式（ヘッダーなし12列・ゼロ埋め数量）かどうかを判定する"""
+    """ロフトの生データ形式（ヘッダーなし・先頭列がYYYYMMDD）かどうかを判定する"""
     if len(df.columns) < 9:
         return False
-    # ヘッダーなしCSVは列名が整数になる。文字列列名（=ヘッダーあり）は除外
-    if not isinstance(df.columns[0], int):
-        return False
-    try:
-        first_val = str(df.iloc[0, 0]).strip().strip('"')
-        return first_val.isdigit() and len(first_val) == 8
-    except Exception:
-        return False
+    # ヘッダーなしCSVをpandasが通常読み込みすると先頭データ行が列名になる
+    # → 列名がYYYYMMDD形式の8桁数字かどうかで判定
+    first_col = str(df.columns[0]).strip().strip('"')
+    return first_col.isdigit() and len(first_col) == 8
 
 
 def _convert_loft_format(df: pd.DataFrame) -> pd.DataFrame:
@@ -326,7 +322,15 @@ def load_pos_data(filepath: str | Path) -> pd.DataFrame:
     if _is_ainz_format(df):
         df = _convert_ainz_format(df, p)
     # ロフト生データ形式を自動検出・変換
+    # ヘッダーなしCSVのため、先頭行をデータとして含めるよう header=None で再読み込み
     elif _is_loft_raw_format(df):
+        if p.suffix.lower() == ".csv":
+            for enc in ("cp932", "utf-8-sig", "utf-8"):
+                try:
+                    df = pd.read_csv(p, dtype=str, encoding=enc, header=None)
+                    break
+                except UnicodeDecodeError:
+                    continue
         df = _convert_loft_format(df)
     # PLAZAの生データ形式を自動検出・変換
     elif _is_plaza_raw_format(df):

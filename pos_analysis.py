@@ -53,12 +53,19 @@ def _load_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=5, show_spinner=False)
 def _cached_load(retailer: str) -> pd.DataFrame:
-    return load_filtered(retailer=retailer)
+    try:
+        return load_filtered(retailer=retailer)
+    except Exception:
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=5, show_spinner=False)
 def _cached_summary(retailer: str) -> dict:
-    df = _cached_load(retailer)
+    # _cached_load を呼ばず直接 load_filtered を呼ぶ（ネストキャッシュ回避）
+    try:
+        df = load_filtered(retailer=retailer)
+    except Exception:
+        df = pd.DataFrame()
     if df.empty:
         return {"total_records": 0, "year_months": [], "brands": [],
                 "date_range": (None, None)}

@@ -70,9 +70,10 @@ def _gh_read() -> tuple[pd.DataFrame, str | None]:
     sha = data["sha"]
     df = pd.read_csv(io.StringIO(content))
     if not df.empty and "日付" in df.columns:
-        df["日付"] = pd.to_datetime(df["日付"])
-        df["売上数量"] = df["売上数量"].astype(int)
-        df["売上金額"] = df["売上金額"].astype(int)
+        df["日付"] = pd.to_datetime(df["日付"], errors="coerce")
+        df = df.dropna(subset=["日付"])
+        df["売上数量"] = pd.to_numeric(df["売上数量"], errors="coerce").fillna(0).astype(int)
+        df["売上金額"] = pd.to_numeric(df["売上金額"], errors="coerce").fillna(0).astype(int)
     return df, sha
 
 

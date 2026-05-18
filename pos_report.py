@@ -72,9 +72,95 @@ def _align(h="center", v="center", wrap=False, indent=0) -> Alignment:
 
 REQUIRED_COLS = {"日付", "小売店名", "店舗名", "ブランド名", "商品名", "売上数量"}
 
+# PLAZAの生データ形式のブランド名マッピング（半角→全角変換後に前方一致）
+_BRAND_PREFIXES = [
+    ("ラフドット",   ["ラフドット"]),
+    ("YOU TOKYO",    ["YOU TOKYO"]),
+    ("TEABLESS",     ["TEABLESS"]),
+    ("バイワンシー", ["バイワンシー"]),
+    ("レチスパ",     ["レチスパ"]),
+    ("Zフルーシー",  ["Zフルーシー", "Z フルーシー"]),
+]
+
+
+def _detect_brand(product_name: str) -> str:
+    """商品名の先頭からブランド名を判定する"""
+    for brand, prefixes in _BRAND_PREFIXES:
+        for prefix in prefixes:
+            if product_name.startswith(prefix):
+                return brand
+    return "（不明）"
+
+
+def _is_plaza_raw_format(df: pd.DataFrame) -> bool:
+    """PLAZAの生データ形式（日別横並び）かどうかを判定する"""
+    return "データ更新年月日" in df.columns and "２８日間売数" in df.columns
+
+
+def _convert_plaza_format(df: pd.DataFrame) -> pd.DataFrame:
+    """PLAZAの生データ（日別横並び）を標準縦形式に変換する"""
+    import unicodedata
+
+    df = df.copy()
+
+    # 年を取得（データ更新年月日: YYYYMMDD）
+    year = int(str(df["データ更新年月日"].dropna().iloc[0])[:4])
+
+    # 日別列を特定（例: "4月28日"）
+    day_col_re = re.compile(r'^(\d+)月(\d+)日$')
+    day_cols = [c for c in df.columns if day_col_re.match(str(c).strip())]
+
+    if not day_cols:
+        raise ValueError("日別列（例: 4月1日）が見つかりません。")
+
+    # 単価を計算（28日間売上金額 ÷ 28日間売数）
+    qty_total = pd.to_numeric(df["２８日間売数"], errors="coerce").fillna(0)
+    amt_total = pd.to_numeric(df["２８日間売上金額"], errors="coerce").fillna(0)
+    df["_unit_price"] = 0
+    mask = qty_total > 0
+    df.loc[mask, "_unit_price"] = (amt_total[mask] / qty_total[mask]).round(0).astype(int)
+
+    # wide → long に変換
+    id_cols = ["店舗名", "商品名", "_unit_price"]
+    melted = df[id_cols + day_cols].melt(
+        id_vars=id_cols,
+        value_vars=day_cols,
+        var_name="_date_str",
+        value_name="売上数量",
+    )
+
+    # 数量 0 の行は除外
+    melted["売上数量"] = pd.to_numeric(melted["売上数量"], errors="coerce").fillna(0).astype(int)
+    melted = melted[melted["売上数量"] > 0].copy()
+
+    # 日付を YYYY-MM-DD に変換
+    def _parse_date(s: str) -> str | None:
+        m = day_col_re.match(str(s).strip())
+        if m:
+            mo, day = int(m.group(1)), int(m.group(2))
+            return f"{year}-{mo:02d}-{day:02d}"
+        return None
+
+    melted["日付"] = melted["_date_str"].apply(_parse_date)
+    melted = melted.dropna(subset=["日付"])
+
+    # 売上金額を計算
+    melted["売上金額"] = (melted["売上数量"] * melted["_unit_price"]).astype(int)
+
+    # 商品名を半角→全角カナに変換してブランドを抽出
+    melted["商品名"] = melted["商品名"].apply(
+        lambda x: unicodedata.normalize("NFKC", str(x)).strip()
+    )
+    melted["ブランド名"] = melted["商品名"].apply(_detect_brand)
+    melted["小売店名"]   = "PLAZA"
+    melted["店舗名"]     = melted["店舗名"].astype(str).str.strip()
+
+    return melted[["日付", "小売店名", "店舗名", "ブランド名", "商品名", "売上数量", "売上金額"]].reset_index(drop=True)
+
 
 def load_pos_data(filepath: str | Path) -> pd.DataFrame:
-    """POSデータを読み込み、型変換・バリデーションを行う"""
+    """POSデータを読み込み、型変換・バリデーションを行う。
+    PLAZAの生データ形式（日別横並び）は自動的に標準形式に変換する。"""
     p = Path(filepath)
 
     if p.suffix.lower() in (".xlsx", ".xls"):
@@ -94,6 +180,10 @@ def load_pos_data(filepath: str | Path) -> pd.DataFrame:
     # カラム名の前後の空白を除去
     df.columns = df.columns.str.strip()
 
+    # PLAZAの生データ形式を自動検出・変換
+    if _is_plaza_raw_format(df):
+        df = _convert_plaza_format(df)
+
     # 必須カラムの確認
     missing = REQUIRED_COLS - set(df.columns)
     if missing:
@@ -104,8 +194,12 @@ def load_pos_data(filepath: str | Path) -> pd.DataFrame:
     df            = df.dropna(subset=["日付"])
     df["売上数量"] = pd.to_numeric(df["売上数量"], errors="coerce").fillna(0).astype(int)
 
+    if "売上金額" not in df.columns:
+        df["売上金額"] = 0
+    df["売上金額"] = pd.to_numeric(df["売上金額"], errors="coerce").fillna(0).astype(int)
+
     for col in ("小売店名", "店舗名", "ブランド名", "商品名"):
-        df[col] = df[col].str.strip().fillna("（不明）")
+        df[col] = df[col].astype(str).str.strip().replace("nan", "（不明）").fillna("（不明）")
 
     return df
 

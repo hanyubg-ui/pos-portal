@@ -67,16 +67,17 @@ c1, c2, c3, c4 = st.columns(4)
 c1.metric("総レコード数",    f"{summary['total_records']:,} 件")
 c2.metric("蓄積月数",        f"{len(summary['year_months'])} ヶ月")
 c3.metric("取り扱いブランド", f"{len(summary['brands'])} 件")
-c4.metric("登録小売店",      "4 社")
+c4.metric("登録小売店",      "5 社")
 st.markdown("---")
 
 # ─── 小売店カード ────────────────────────────────────────────────────
 RETAILERS = list(RETAILER_CONFIG.keys())   # ["PLAZA", "ハンズ", "ロフト", "アインズ"]
 PAGE_MAP   = {
-    "PLAZA":    "pages/1_PLAZA.py",
-    "ハンズ":   "pages/2_Hands.py",
-    "ロフト":   "pages/3_Loft.py",
-    "アインズ": "pages/4_Ainz.py",
+    "PLAZA":        "pages/1_PLAZA.py",
+    "ハンズ":       "pages/2_Hands.py",
+    "ロフト":       "pages/3_Loft.py",
+    "アインズ":     "pages/4_Ainz.py",
+    "アットコスメ": "pages/5_Cosme.py",
 }
 
 cols = st.columns(4, gap="large")

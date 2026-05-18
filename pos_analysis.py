@@ -27,10 +27,11 @@ from pos_report import create_sample_data, generate_reports, load_pos_data
 
 # ─── 小売店ブランド設定 ──────────────────────────────────────────────
 RETAILER_CONFIG: dict[str, dict] = {
-    "PLAZA":    {"color": "#C0392B", "icon": "🛍️",  "bg": "#FDF2F2"},
-    "ハンズ":   {"color": "#1A6BA0", "icon": "🔧",  "bg": "#EBF5FB"},
-    "ロフト":   {"color": "#D68910", "icon": "✏️",  "bg": "#FEF9E7"},
-    "アインズ": {"color": "#1E8449", "icon": "💄",  "bg": "#EAFAF1"},
+    "PLAZA":        {"color": "#C0392B", "icon": "🛍️",  "bg": "#FDF2F2"},
+    "ハンズ":       {"color": "#1A6BA0", "icon": "🔧",  "bg": "#EBF5FB"},
+    "ロフト":       {"color": "#D68910", "icon": "✏️",  "bg": "#FEF9E7"},
+    "アインズ":     {"color": "#1E8449", "icon": "💄",  "bg": "#EAFAF1"},
+    "アットコスメ": {"color": "#C2185B", "icon": "🌸",  "bg": "#FCE4EC"},
 }
 
 

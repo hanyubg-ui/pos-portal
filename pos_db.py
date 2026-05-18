@@ -351,6 +351,21 @@ def delete_by_month_brand(
     return cur.rowcount
 
 
+def delete_retailer_all(retailer: str, db_path: Path = DEFAULT_DB) -> int:
+    """指定した小売店の全レコードを削除。削除件数を返す。"""
+    if _get_github_config():
+        df, sha = _gh_read_retailer(retailer)
+        n = len(df)
+        if n > 0 and sha:
+            _gh_write_retailer(pd.DataFrame(), sha, retailer)
+        return n
+
+    _sqlite_init(db_path)
+    with _conn(db_path) as con:
+        cur = con.execute("DELETE FROM pos_records WHERE 小売店名=?", (retailer,))
+    return cur.rowcount
+
+
 def delete_all(db_path: Path = DEFAULT_DB) -> int:
     """全レコードを削除。削除件数を返す。"""
     if _get_github_config():

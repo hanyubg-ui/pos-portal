@@ -487,3 +487,16 @@ def render_retailer_page(retailer_name: str) -> None:
                 _clear_cache(retailer_name)
                 st.success(f"✅ {n:,} 件を削除しました")
                 st.rerun()
+
+        st.markdown("---")
+        st.markdown("### 一括削除")
+        if summary["total_records"] > 0:
+            if st.button(f"🗑 {retailer_name}の全データを削除する",
+                         type="secondary", key=f"del_all_{retailer_name}"):
+                from pos_db import delete_retailer_all
+                n = delete_retailer_all(retailer_name)
+                _clear_cache(retailer_name)
+                st.success(f"✅ {n:,} 件をすべて削除しました")
+                st.rerun()
+        else:
+            st.caption("削除するデータがありません")

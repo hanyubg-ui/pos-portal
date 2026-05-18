@@ -158,8 +158,10 @@ def _is_loft_raw_format(df: pd.DataFrame) -> bool:
     """ロフトの生データ形式（ヘッダーなし12列・ゼロ埋め数量）かどうかを判定する"""
     if len(df.columns) < 9:
         return False
+    # ヘッダーなしCSVは列名が整数になる。文字列列名（=ヘッダーあり）は除外
+    if not isinstance(df.columns[0], int):
+        return False
     try:
-        # 列名が 0,1,2... の整数（ヘッダーなし）かつ先頭列がYYYYMMDD形式
         first_val = str(df.iloc[0, 0]).strip().strip('"')
         return first_val.isdigit() and len(first_val) == 8
     except Exception:

@@ -92,6 +92,68 @@ def _detect_brand(product_name: str) -> str:
     return "（不明）"
 
 
+def _is_ainz_format(df: pd.DataFrame) -> bool:
+    """アインズ形式（商品×店舗クロス集計）かどうかを判定する"""
+    store_re = re.compile(r'^\d{5,8}:.+$')
+    return any(store_re.match(str(c)) for c in df.columns)
+
+
+def _convert_ainz_format(df: pd.DataFrame, filepath: "Path") -> pd.DataFrame:
+    """アインズの商品×店舗クロス集計を標準縦形式に変換する"""
+    import unicodedata, calendar as _cal
+
+    # ファイル名から月・年を推定
+    stem = filepath.stem
+    month_m = re.search(r'(\d+)月', stem)
+    year_m  = re.search(r'(20\d{2})', stem)
+    month = int(month_m.group(1)) if month_m else pd.Timestamp.now().month
+    year  = int(year_m.group(1))  if year_m  else pd.Timestamp.now().year
+    last_day = _cal.monthrange(year, month)[1]
+    date_str = f"{year}-{month:02d}-{last_day:02d}"
+
+    # 店舗コード列を抽出（"NNNNN:店名" パターン）
+    store_re = re.compile(r'^\d{5,8}:(.+)$')
+    store_cols = {}  # 列名 → 店舗名
+    for col in df.columns:
+        m = store_re.match(str(col))
+        if m:
+            store_cols[col] = m.group(1).strip()
+
+    # 商品行を抽出（col0 が "JAN13コード:商品名" 形式）
+    product_re = re.compile(r'^(\d{13}):(.+)$')
+    records = []
+
+    for _, row in df.iterrows():
+        col0 = str(row.iloc[0]).strip()
+        pm = product_re.match(col0)
+        if not pm:
+            continue
+        product_name = unicodedata.normalize("NFKC", pm.group(2).strip())
+        brand = _detect_brand(product_name)
+
+        for col, store_name in store_cols.items():
+            val = str(row[col]).strip()
+            if val in ("", "nan"):
+                continue
+            try:
+                qty = int(float(val))
+            except (ValueError, TypeError):
+                continue
+            if qty <= 0:
+                continue
+            records.append({
+                "日付":     date_str,
+                "小売店名": "アインズ",
+                "店舗名":   store_name,
+                "ブランド名": brand,
+                "商品名":   product_name,
+                "売上数量": qty,
+                "売上金額": 0,
+            })
+
+    return pd.DataFrame(records)
+
+
 def _is_loft_raw_format(df: pd.DataFrame) -> bool:
     """ロフトの生データ形式（ヘッダーなし12列・ゼロ埋め数量）かどうかを判定する"""
     if len(df.columns) < 9:
@@ -238,7 +300,7 @@ def _convert_plaza_format(df: pd.DataFrame) -> pd.DataFrame:
 
 def load_pos_data(filepath: str | Path) -> pd.DataFrame:
     """POSデータを読み込み、型変換・バリデーションを行う。
-    PLAZAの生データ形式（日別横並び）は自動的に標準形式に変換する。"""
+    各小売店の生データ形式は自動的に標準形式に変換する。"""
     p = Path(filepath)
 
     if p.suffix.lower() in (".xlsx", ".xls"):
@@ -258,8 +320,11 @@ def load_pos_data(filepath: str | Path) -> pd.DataFrame:
     # カラム名の前後の空白を除去
     df.columns = df.columns.str.strip()
 
+    # アインズ形式（商品×店舗クロス集計）を自動検出・変換
+    if _is_ainz_format(df):
+        df = _convert_ainz_format(df, p)
     # ロフト生データ形式を自動検出・変換
-    if _is_loft_raw_format(df):
+    elif _is_loft_raw_format(df):
         df = _convert_loft_format(df)
     # PLAZAの生データ形式を自動検出・変換
     elif _is_plaza_raw_format(df):

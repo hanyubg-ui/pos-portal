@@ -92,6 +92,65 @@ def _detect_brand(product_name: str) -> str:
     return "（不明）"
 
 
+def _is_loft_raw_format(df: pd.DataFrame) -> bool:
+    """ロフトの生データ形式（ヘッダーなし12列・ゼロ埋め数量）かどうかを判定する"""
+    if len(df.columns) < 9:
+        return False
+    try:
+        # 列名が 0,1,2... の整数（ヘッダーなし）かつ先頭列がYYYYMMDD形式
+        first_val = str(df.iloc[0, 0]).strip().strip('"')
+        return first_val.isdigit() and len(first_val) == 8
+    except Exception:
+        return False
+
+
+def _convert_loft_format(df: pd.DataFrame) -> pd.DataFrame:
+    """ロフトの生データを標準縦形式に変換する"""
+    import unicodedata
+
+    df = df.copy()
+    # 列インデックスで参照（ヘッダーなしのため）
+    cols = df.columns.tolist()
+
+    def clean(val):
+        return str(val).strip().strip('"')
+
+    # 日付: YYYYMMDD → YYYY-MM-DD
+    dates = df.iloc[:, 0].apply(lambda x: clean(x)).apply(
+        lambda x: f"{x[:4]}-{x[4:6]}-{x[6:8]}" if len(x) == 8 and x.isdigit() else None
+    )
+
+    # 店舗コード → 店舗名
+    store_codes = df.iloc[:, 1].apply(clean)
+    store_names = "ロフト" + store_codes
+
+    # 商品名: NFKC正規化で半角→全角カナ変換
+    product_names = df.iloc[:, 4].apply(
+        lambda x: unicodedata.normalize("NFKC", clean(x))
+    )
+
+    # 数量・金額: ゼロ埋め文字列 → 整数
+    quantities = df.iloc[:, 7].apply(lambda x: int(clean(x)) if clean(x).isdigit() else 0)
+    amounts    = df.iloc[:, 8].apply(lambda x: int(clean(x)) if clean(x).isdigit() else 0)
+
+    # ブランド名を商品名から判定
+    brands = product_names.apply(_detect_brand)
+
+    result = pd.DataFrame({
+        "日付":     dates,
+        "小売店名": "ロフト",
+        "店舗名":   store_names,
+        "ブランド名": brands,
+        "商品名":   product_names,
+        "売上数量": quantities,
+        "売上金額": amounts,
+    })
+
+    # 数量0・日付なしを除外
+    result = result[result["売上数量"] > 0].dropna(subset=["日付"]).reset_index(drop=True)
+    return result
+
+
 def _is_plaza_raw_format(df: pd.DataFrame) -> bool:
     """PLAZAの生データ形式（日別横並び）かどうかを判定する"""
     return "データ更新年月日" in df.columns and "２８日間売数" in df.columns
@@ -166,7 +225,7 @@ def load_pos_data(filepath: str | Path) -> pd.DataFrame:
     if p.suffix.lower() in (".xlsx", ".xls"):
         df = pd.read_excel(p, dtype=str)
     elif p.suffix.lower() == ".csv":
-        for enc in ("utf-8-sig", "cp932", "utf-8"):
+        for enc in ("cp932", "utf-8-sig", "utf-8"):
             try:
                 df = pd.read_csv(p, dtype=str, encoding=enc)
                 break
@@ -180,8 +239,11 @@ def load_pos_data(filepath: str | Path) -> pd.DataFrame:
     # カラム名の前後の空白を除去
     df.columns = df.columns.str.strip()
 
+    # ロフト生データ形式を自動検出・変換
+    if _is_loft_raw_format(df):
+        df = _convert_loft_format(df)
     # PLAZAの生データ形式を自動検出・変換
-    if _is_plaza_raw_format(df):
+    elif _is_plaza_raw_format(df):
         df = _convert_plaza_format(df)
 
     # 必須カラムの確認

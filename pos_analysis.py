@@ -46,34 +46,51 @@ def _load_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
         REQUIRED_COLS,
     )
 
+    if not file_bytes:
+        raise ValueError(f"ファイルが空です（0バイト）: {filename}")
+
     suffix = Path(filename).suffix.lower()
 
     if suffix in (".xlsx", ".xls"):
         df = pd.read_excel(_io.BytesIO(file_bytes), dtype=str)
+        df.columns = [str(c).strip() for c in df.columns]
+        if _is_ainz_format(df):
+            df = _convert_ainz_format(df, Path(filename))
+        elif _is_plaza_raw_format(df):
+            df = _convert_plaza_format(df)
+
     elif suffix == ".csv":
+        # header=None で読むことで headerless CSV（ロフト等）の EmptyDataError を回避
         for enc in ("cp932", "utf-8-sig", "utf-8"):
             try:
-                df = pd.read_csv(_io.BytesIO(file_bytes), dtype=str, encoding=enc)
+                df_raw = pd.read_csv(
+                    _io.BytesIO(file_bytes), dtype=str, encoding=enc, header=None
+                )
                 break
             except UnicodeDecodeError:
                 continue
         else:
             raise ValueError(f"文字コードの自動判定に失敗しました: {filename}")
+
+        if df_raw.empty:
+            raise ValueError(f"ファイルにデータがありません: {filename}")
+
+        # 先頭セルが YYYYMMDD（8桁数字）ならロフト形式（ヘッダーなし）
+        first_cell = str(df_raw.iloc[0, 0]).strip().strip('"')
+        if first_cell.isdigit() and len(first_cell) == 8 and len(df_raw.columns) >= 9:
+            df = _convert_loft_format(df_raw)
+        else:
+            # 通常形式：1行目がヘッダー
+            headers = [str(c).strip() for c in df_raw.iloc[0]]
+            df = df_raw.iloc[1:].reset_index(drop=True)
+            df.columns = headers
+            if _is_ainz_format(df):
+                df = _convert_ainz_format(df, Path(filename))
+            elif _is_plaza_raw_format(df):
+                df = _convert_plaza_format(df)
+
     else:
         raise ValueError(f"未対応のファイル形式: {suffix}（.xlsx / .xls / .csv のみ対応）")
-
-    df.columns = df.columns.str.strip()
-
-    if _is_ainz_format(df):
-        df = _convert_ainz_format(df, Path(filename))
-    elif _is_loft_raw_format(df):
-        header_row = pd.DataFrame([df.columns.tolist()], columns=range(len(df.columns)))
-        body = df.copy()
-        body.columns = range(len(body.columns))
-        df = pd.concat([header_row, body], ignore_index=True)
-        df = _convert_loft_format(df)
-    elif _is_plaza_raw_format(df):
-        df = _convert_plaza_format(df)
 
     missing = REQUIRED_COLS - set(df.columns)
     if missing:

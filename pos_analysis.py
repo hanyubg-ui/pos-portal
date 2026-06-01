@@ -202,30 +202,41 @@ def render_retailer_page(retailer_name: str) -> None:
             key=f"upload_{retailer_name}",
         )
 
+        # 保存結果をセッション状態で保持（st.rerun後も表示できるよう）
+        _save_key = f"_save_result_{retailer_name}"
+        if _save_key in st.session_state:
+            res = st.session_state.pop(_save_key)
+            if res.get("error"):
+                st.error(res["error"])
+            else:
+                st.success(f"✅ **{res['inserted']:,}** 件保存しました（うち {retailer_name}: {res['this']:,} 件）")
+                if res.get("replaced"):
+                    st.warning("上書きしたデータ:\n" + "\n".join(f"• {r}" for r in res["replaced"]))
+
         if uploaded is not None:
-            st.caption(f"📎 {uploaded.name}  ({uploaded.size:,} bytes) [v4]")
+            st.caption(f"📎 {uploaded.name}  ({uploaded.size:,} bytes)")
             if st.button("💾 DBに保存する", type="primary",
                          use_container_width=True, key=f"save_{retailer_name}"):
                 with st.spinner("保存中…"):
+                    file_bytes = b""
                     try:
                         uploaded.seek(0)
                         file_bytes = uploaded.read()
                         df_up = _load_file(file_bytes, uploaded.name)
-                        # このページの小売店に該当するデータのみ件数を表示
                         df_this = df_up[df_up["小売店名"] == retailer_name]
                         result  = save_records(df_up)
                         _clear_cache(retailer_name)
-
-                        st.success(f"✅ **{result['inserted']:,}** 件保存（うち {retailer_name}: {len(df_this):,} 件）")
-                        if result["replaced"]:
-                            st.warning(
-                                "上書きしたデータ:\n"
-                                + "\n".join(f"• {r}" for r in result["replaced"])
-                            )
-                        st.rerun()
+                        st.session_state[_save_key] = {
+                            "inserted": result["inserted"],
+                            "this":     len(df_this),
+                            "replaced": result.get("replaced", []),
+                        }
                     except Exception as e:
                         head_hex = file_bytes[:16].hex() if file_bytes else "empty"
-                        st.error(f"エラー [{len(file_bytes):,}bytes, head={head_hex}]: {e}")
+                        st.session_state[_save_key] = {
+                            "error": f"エラー [{len(file_bytes):,}bytes, head={head_hex}]: {e}"
+                        }
+                    st.rerun()
 
         # サンプルデータ
         with st.expander("🔽 サンプルデータで試す"):

@@ -226,7 +226,10 @@ def _convert_loft_format(df: pd.DataFrame) -> pd.DataFrame:
         "売上金額":   amounts,
     })
 
-    result = result[result["売上数量"] > 0].dropna(subset=["日付"]).reset_index(drop=True)
+    # 数量0・日付なし・合計行（店舗コード9999）を除外
+    result = result[result["売上数量"] > 0]
+    result = result[result["店舗名"] != "ロフト9999"]
+    result = result.dropna(subset=["日付"]).reset_index(drop=True)
     return result
 
 

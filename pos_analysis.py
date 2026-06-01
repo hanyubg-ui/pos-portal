@@ -225,6 +225,7 @@ def render_retailer_page(retailer_name: str) -> None:
                         df_up = _load_file(file_bytes, uploaded.name)
                         df_this = df_up[df_up["小売店名"] == retailer_name]
                         result  = save_records(df_up)
+                        import time as _time; _time.sleep(2)  # GitHub反映待ち
                         _clear_cache(retailer_name)
                         st.session_state[_save_key] = {
                             "inserted": result["inserted"],

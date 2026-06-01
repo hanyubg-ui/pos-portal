@@ -2,8 +2,10 @@
 pos_db.py — POS データ永続化モジュール
 
 ローカル実行時  : SQLite  (pos_data.db)
-Streamlit Cloud : GitHub リポジトリ内の CSV ファイル（小売店ごとに分割）
-                  data/pos_PLAZA.csv, data/pos_ロフト.csv, ...
+Streamlit Cloud : GitHub リポジトリ内の CSV ファイル（小売店×月ごとに分割）
+                  data/pos_PLAZA_2026-04.csv
+                  data/pos_ロフト_2026-04.csv
+                  data/pos_ロフト_2026-05.csv  ...
                   secrets.toml に以下を設定:
                     GITHUB_TOKEN = "ghp_xxxx"
                     GITHUB_OWNER = "あなたのGitHubユーザー名"
@@ -13,6 +15,7 @@ Streamlit Cloud : GitHub リポジトリ内の CSV ファイル（小売店ご�
 import base64
 import io
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -44,13 +47,15 @@ def _get_github_config() -> dict | None:
 
 
 _KNOWN_RETAILERS = ["PLAZA", "ハンズ", "ロフト", "アインズ", "アットコスメ"]
-_LEGACY_PATH = "data/pos_data.csv"
+
+# 月別ファイル名パターン: data/pos_{retailer}_{YYYY-MM}.csv
+_YM_PATTERN = re.compile(r"^pos_(.+)_(\d{4}-\d{2})\.csv$")
 
 
-def _gh_data_path(retailer: str) -> str:
-    """小売店名から GitHub 上のファイルパスを返す"""
+def _gh_ym_path(retailer: str, ym: str) -> str:
+    """小売店名＋年月から GitHub 上のファイルパスを返す"""
     safe = retailer.replace("/", "_").replace("\\", "_").replace(" ", "_")
-    return f"data/pos_{safe}.csv"
+    return f"data/pos_{safe}_{ym}.csv"
 
 
 # ─────────────────────────────────────────────────
@@ -99,8 +104,10 @@ def _gh_write_path(df: pd.DataFrame, sha: str | None, path: str, message: str) -
     import requests
     cfg = _get_github_config()
     df_out = df.copy()
-    if "日付" in df_out.columns and pd.api.types.is_datetime64_any_dtype(df_out["日付"]):
-        df_out["日付"] = df_out["日付"].dt.strftime("%Y-%m-%d")
+    if "日付" in df_out.columns:
+        df_out["日付"] = df_out["日付"].apply(
+            lambda x: x.strftime("%Y-%m-%d") if hasattr(x, "strftime") else str(x)[:10]
+        )
     csv_bytes = df_out.to_csv(index=False).encode("utf-8-sig")
     content_b64 = base64.b64encode(csv_bytes).decode()
     payload: dict = {"message": message, "content": content_b64}
@@ -111,15 +118,70 @@ def _gh_write_path(df: pd.DataFrame, sha: str | None, path: str, message: str) -
     resp.raise_for_status()
 
 
-def _gh_read_retailer(retailer: str) -> tuple[pd.DataFrame, str | None]:
-    """小売店専用 CSV を GitHub から読み込む"""
-    return _gh_read_path(_gh_data_path(retailer))
+def _gh_list_data_files() -> list[dict]:
+    """data/ ディレクトリのファイル一覧を返す（name, path, sha を含む）"""
+    import requests
+    cfg = _get_github_config()
+    url = f"https://api.github.com/repos/{cfg['owner']}/{cfg['repo']}/contents/data"
+    resp = requests.get(url, headers=_gh_headers(cfg), timeout=15)
+    if resp.status_code == 404:
+        return []
+    resp.raise_for_status()
+    return [f for f in resp.json() if f.get("type") == "file" and f["name"].endswith(".csv")]
 
 
-def _gh_write_retailer(df: pd.DataFrame, sha: str | None, retailer: str) -> None:
-    """小売店専用 CSV を GitHub に書き込む"""
-    msg = f"POS data update {retailer} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-    _gh_write_path(df, sha, _gh_data_path(retailer), msg)
+def _gh_read_ym(retailer: str, ym: str) -> tuple[pd.DataFrame, str | None]:
+    """小売店×年月の CSV を読み込む"""
+    return _gh_read_path(_gh_ym_path(retailer, ym))
+
+
+def _gh_write_ym(df: pd.DataFrame, sha: str | None, retailer: str, ym: str) -> None:
+    """小売店×年月の CSV を書き込む"""
+    msg = f"POS update {retailer} {ym} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    _gh_write_path(df, sha, _gh_ym_path(retailer, ym), msg)
+
+
+def _gh_load_retailer_all(retailer: str) -> pd.DataFrame:
+    """小売店の全月データを読み込んで結合する"""
+    files = _gh_list_data_files()
+    safe = retailer.replace("/", "_").replace("\\", "_").replace(" ", "_")
+    prefix = f"pos_{safe}_"
+    dfs = []
+    for f in files:
+        if f["name"].startswith(prefix) and _YM_PATTERN.match(f["name"]):
+            df, _ = _gh_read_path(f["path"])
+            if not df.empty:
+                dfs.append(df)
+    if not dfs:
+        # 旧形式フォールバック: data/pos_{retailer}.csv
+        df, _ = _gh_read_path(f"data/pos_{safe}.csv")
+        return df
+    return pd.concat(dfs, ignore_index=True)
+
+
+def _gh_migrate_if_needed(retailer: str) -> None:
+    """旧形式（月混在）ファイルを月別ファイルに分割する"""
+    import requests
+    cfg = _get_github_config()
+    safe = retailer.replace("/", "_").replace("\\", "_").replace(" ", "_")
+    old_path = f"data/pos_{safe}.csv"
+
+    old_df, old_sha = _gh_read_path(old_path)
+    if old_df.empty or old_sha is None:
+        return
+
+    if "年月" not in old_df.columns:
+        old_df["年月"] = old_df["日付"].dt.strftime("%Y-%m")
+
+    for ym, group in old_df.groupby("年月"):
+        new_path = _gh_ym_path(retailer, ym)
+        existing, sha = _gh_read_path(new_path)
+        if existing.empty:  # 新ファイルがなければ移行
+            _gh_write_ym(group.reset_index(drop=True), sha, retailer, ym)
+
+    # 旧ファイルを空にして事実上無効化
+    _gh_write_path(pd.DataFrame(), old_sha, old_path,
+                   f"Migrated {retailer} to per-month files")
 
 
 # ─────────────────────────────────────────────────
@@ -180,47 +242,41 @@ def init_db(db_path: Path = DEFAULT_DB) -> None:
 
 
 def save_records(df: pd.DataFrame, db_path: Path = DEFAULT_DB) -> dict:
-    """DataFrame を DB に保存。同じ（年月×ブランド名×小売店名）は上書き。"""
+    """DataFrame を DB に保存。月ごとに別ファイル。同月は上書き。"""
     df = df.copy()
     df["年月"]    = df["日付"].dt.strftime("%Y-%m")
     df["登録日時"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    pairs = df[["年月", "ブランド名", "小売店名"]].drop_duplicates().values.tolist()
     replaced: list[str] = []
 
     if _get_github_config():
-        # ── GitHub モード：小売店ごとに別ファイルに書き込む ──
-        retailers_in_df = df["小売店名"].unique().tolist()
-        for retailer in retailers_in_df:
-            retailer_new = df[df["小売店名"] == retailer].copy()
-            existing_df, sha = _gh_read_retailer(retailer)
+        # ── GitHub モード：小売店×年月ごとに別ファイルに書き込む ──
+        for (retailer, ym), group in df.groupby(["小売店名", "年月"]):
+            group = group.copy()
+            existing_df, sha = _gh_read_ym(retailer, ym)
 
-            # 同一（年月×ブランド×小売店）は削除して上書き
-            for ym, brand, ret in pairs:
-                if ret != retailer:
-                    continue
-                if not existing_df.empty:
-                    mask = (
-                        (existing_df["年月"] == ym) &
-                        (existing_df["ブランド名"] == brand) &
-                        (existing_df["小売店名"] == retailer)
-                    )
-                    if mask.any():
-                        existing_df = existing_df[~mask]
-                        replaced.append(f"{ym} / {brand} / {retailer}")
+            if not existing_df.empty:
+                # 同一（年月×ブランド×小売店）は上書き
+                brands_in_new = group["ブランド名"].unique().tolist()
+                mask = existing_df["ブランド名"].isin(brands_in_new)
+                if mask.any():
+                    for brand in brands_in_new:
+                        b_mask = (existing_df["ブランド名"] == brand)
+                        if b_mask.any():
+                            existing_df = existing_df[~b_mask]
+                            replaced.append(f"{ym} / {brand} / {retailer}")
+                merged = pd.concat([existing_df, group], ignore_index=True)
+            else:
+                merged = group
 
-            retailer_new["日付"] = retailer_new["日付"].dt.strftime("%Y-%m-%d")
-            merged = (
-                pd.concat([existing_df, retailer_new], ignore_index=True)
-                if not existing_df.empty else retailer_new
-            )
-            _gh_write_retailer(merged, sha, retailer)
+            _gh_write_ym(merged, sha, retailer, ym)
 
         return {"inserted": len(df), "replaced": replaced}
 
     else:
         # ── SQLite モード ──
         _sqlite_init(db_path)
+        pairs = df[["年月", "ブランド名", "小売店名"]].drop_duplicates().values.tolist()
         df_save = df.copy()
         df_save["日付"] = df_save["日付"].dt.strftime("%Y-%m-%d")
 
@@ -251,16 +307,14 @@ def save_records(df: pd.DataFrame, db_path: Path = DEFAULT_DB) -> dict:
 def load_all(db_path: Path = DEFAULT_DB) -> pd.DataFrame:
     """全レコードを DataFrame で返す"""
     if _get_github_config():
+        files = _gh_list_data_files()
         dfs = []
-        for retailer in _KNOWN_RETAILERS:
-            df, _ = _gh_read_retailer(retailer)
-            if not df.empty:
-                dfs.append(df)
-        if dfs:
-            return pd.concat(dfs, ignore_index=True)
-        # レガシーファイル（移行前の統合CSV）にフォールバック
-        df, _ = _gh_read_path(_LEGACY_PATH)
-        return df
+        for f in files:
+            if _YM_PATTERN.match(f["name"]):
+                df, _ = _gh_read_path(f["path"])
+                if not df.empty:
+                    dfs.append(df)
+        return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 
     _sqlite_init(db_path)
     with _conn(db_path) as con:
@@ -283,23 +337,49 @@ def load_filtered(
     retailer: str | None = None,
 ) -> pd.DataFrame:
     """条件を指定してレコードを取得する"""
-    if _get_github_config() and retailer:
-        # 小売店が指定されている場合はその専用ファイルだけ読む（高速）
-        df, _ = _gh_read_retailer(retailer)
-        if df.empty:
-            return df
-    else:
-        df = load_all(db_path)
+    if _get_github_config():
+        if retailer and year_month:
+            # 特定月のファイルだけ読む（最速）
+            df, _ = _gh_read_ym(retailer, year_month)
+        elif retailer:
+            df = _gh_load_retailer_all(retailer)
+        else:
+            df = load_all(db_path)
+
         if df.empty:
             return df
         if retailer:
             df = df[df["小売店名"] == retailer]
+        if year_month:
+            if "年月" not in df.columns:
+                df["年月"] = df["日付"].dt.strftime("%Y-%m")
+            df = df[df["年月"] == year_month]
+        if brand:
+            df = df[df["ブランド名"] == brand]
+        return df.reset_index(drop=True)
 
-    if year_month:
-        df = df[df["年月"] == year_month]
-    if brand:
-        df = df[df["ブランド名"] == brand]
-    return df.reset_index(drop=True)
+    _sqlite_init(db_path)
+    with _conn(db_path) as con:
+        conditions = []
+        params = []
+        if year_month:
+            conditions.append("年月=?"); params.append(year_month)
+        if brand:
+            conditions.append("ブランド名=?"); params.append(brand)
+        if retailer:
+            conditions.append("小売店名=?"); params.append(retailer)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        df = pd.read_sql(
+            f"SELECT 年月, 日付, 小売店名, 店舗名, ブランド名, 商品名, 売上数量, 売上金額"
+            f" FROM pos_records {where} ORDER BY 日付, 小売店名, 店舗名",
+            con, params=params,
+        )
+    if df.empty:
+        return df
+    df["日付"]    = pd.to_datetime(df["日付"])
+    df["売上数量"] = df["売上数量"].astype(int)
+    df["売上金額"] = df["売上金額"].astype(int)
+    return df
 
 
 def get_summary(db_path: Path = DEFAULT_DB) -> dict:
@@ -307,6 +387,8 @@ def get_summary(db_path: Path = DEFAULT_DB) -> dict:
     df = load_all(db_path)
     if df.empty:
         return {"total_records": 0, "year_months": [], "brands": [], "retailers": [], "date_range": (None, None)}
+    if "年月" not in df.columns:
+        df["年月"] = df["日付"].dt.strftime("%Y-%m")
     return {
         "total_records": len(df),
         "year_months":   sorted(df["年月"].unique().tolist()),
@@ -324,6 +406,8 @@ def list_month_brand_pairs(
     df = load_filtered(db_path=db_path, retailer=retailer)
     if df.empty:
         return []
+    if "年月" not in df.columns:
+        df["年月"] = df["日付"].dt.strftime("%Y-%m")
     pairs = df[["年月", "ブランド名"]].drop_duplicates().sort_values(["年月", "ブランド名"])
     return list(pairs.itertuples(index=False, name=None))
 
@@ -337,13 +421,13 @@ def delete_by_month_brand(
         targets = [retailer] if retailer else _KNOWN_RETAILERS
         total = 0
         for ret in targets:
-            df, sha = _gh_read_retailer(ret)
+            df, sha = _gh_read_ym(ret, year_month)
             if df.empty:
                 continue
-            mask = (df["年月"] == year_month) & (df["ブランド名"] == brand)
+            mask = (df["ブランド名"] == brand)
             n = int(mask.sum())
             if n > 0:
-                _gh_write_retailer(df[~mask], sha, ret)
+                _gh_write_ym(df[~mask].reset_index(drop=True), sha, ret, year_month)
                 total += n
         return total
 
@@ -359,11 +443,19 @@ def delete_by_month_brand(
 def delete_retailer_all(retailer: str, db_path: Path = DEFAULT_DB) -> int:
     """指定した小売店の全レコードを削除。削除件数を返す。"""
     if _get_github_config():
-        df, sha = _gh_read_retailer(retailer)
-        n = len(df)
-        if n > 0 and sha:
-            _gh_write_retailer(pd.DataFrame(), sha, retailer)
-        return n
+        files = _gh_list_data_files()
+        safe = retailer.replace("/", "_").replace("\\", "_").replace(" ", "_")
+        prefix = f"pos_{safe}_"
+        total = 0
+        for f in files:
+            if f["name"].startswith(prefix) and _YM_PATTERN.match(f["name"]):
+                df, sha = _gh_read_path(f["path"])
+                total += len(df)
+                if sha:
+                    # ファイルを空にする（GitHub は空ファイルでも削除はAPIが別）
+                    _gh_write_path(pd.DataFrame(), sha, f["path"],
+                                   f"Delete all {retailer} data")
+        return total
 
     _sqlite_init(db_path)
     with _conn(db_path) as con:
@@ -374,12 +466,14 @@ def delete_retailer_all(retailer: str, db_path: Path = DEFAULT_DB) -> int:
 def delete_all(db_path: Path = DEFAULT_DB) -> int:
     """全レコードを削除。削除件数を返す。"""
     if _get_github_config():
+        files = _gh_list_data_files()
         total = 0
-        for retailer in _KNOWN_RETAILERS:
-            df, sha = _gh_read_retailer(retailer)
-            if not df.empty and sha:
+        for f in files:
+            if _YM_PATTERN.match(f["name"]):
+                df, sha = _gh_read_path(f["path"])
                 total += len(df)
-                _gh_write_retailer(pd.DataFrame(), sha, retailer)
+                if sha:
+                    _gh_write_path(pd.DataFrame(), sha, f["path"], "Delete all POS data")
         return total
 
     _sqlite_init(db_path)
@@ -393,5 +487,8 @@ def export_csv_bytes(db_path: Path = DEFAULT_DB) -> bytes:
     df = load_all(db_path)
     if df.empty:
         return "データがありません\n".encode("utf-8-sig")
-    df["日付"] = df["日付"].dt.strftime("%Y-%m-%d")
-    return df.to_csv(index=False).encode("utf-8-sig")
+    df_out = df.copy()
+    df_out["日付"] = df_out["日付"].apply(
+        lambda x: x.strftime("%Y-%m-%d") if hasattr(x, "strftime") else str(x)[:10]
+    )
+    return df_out.to_csv(index=False).encode("utf-8-sig")

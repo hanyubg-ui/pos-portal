@@ -173,15 +173,23 @@ def _is_loft_raw_format(df: pd.DataFrame) -> bool:
 
 
 def _convert_loft_format(df: pd.DataFrame) -> pd.DataFrame:
-    """ロフトの生データを標準縦形式に変換する"""
+    """ロフトの生データを標準縦形式に変換する。
+    LFPO形式（9列）と LFPOSMON形式（13列）の両方に対応。
+
+    LFPO（9列）:   col[4]=商品名, col[7]=数量, col[8]=金額
+    LFPOSMON（13列）: col[5]=商品名, col[8]=数量, col[9]=金額
+    """
     import unicodedata
 
     df = df.copy()
-    # 列インデックスで参照（ヘッダーなしのため）
-    cols = df.columns.tolist()
+    n_cols = len(df.columns)
 
     def clean(val):
         return str(val).strip().strip('"')
+
+    def to_int(val):
+        s = clean(val).lstrip('-')
+        return int(clean(val)) if s.isdigit() else 0
 
     # 日付: YYYYMMDD → YYYY-MM-DD
     dates = df.iloc[:, 0].apply(lambda x: clean(x)).apply(
@@ -189,32 +197,35 @@ def _convert_loft_format(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     # 店舗コード → 店舗名
-    store_codes = df.iloc[:, 1].apply(clean)
-    store_names = "ロフト" + store_codes
+    store_names = "ロフト" + df.iloc[:, 1].apply(clean)
 
-    # 商品名: NFKC正規化で半角→全角カナ変換
-    product_names = df.iloc[:, 4].apply(
-        lambda x: unicodedata.normalize("NFKC", clean(x))
-    )
+    if n_cols >= 13:
+        # LFPOSMON形式（13列）: col[5]=商品名, col[8]=数量, col[9]=金額
+        product_names = df.iloc[:, 5].apply(
+            lambda x: unicodedata.normalize("NFKC", clean(x))
+        )
+        quantities = df.iloc[:, 8].apply(to_int)
+        amounts    = df.iloc[:, 9].apply(to_int)
+    else:
+        # LFPO形式（9列）: col[4]=商品名, col[7]=数量, col[8]=金額
+        product_names = df.iloc[:, 4].apply(
+            lambda x: unicodedata.normalize("NFKC", clean(x))
+        )
+        quantities = df.iloc[:, 7].apply(to_int)
+        amounts    = df.iloc[:, 8].apply(to_int)
 
-    # 数量・金額: ゼロ埋め文字列 → 整数
-    quantities = df.iloc[:, 7].apply(lambda x: int(clean(x)) if clean(x).isdigit() else 0)
-    amounts    = df.iloc[:, 8].apply(lambda x: int(clean(x)) if clean(x).isdigit() else 0)
-
-    # ブランド名を商品名から判定
     brands = product_names.apply(_detect_brand)
 
     result = pd.DataFrame({
-        "日付":     dates,
-        "小売店名": "ロフト",
-        "店舗名":   store_names,
+        "日付":       dates,
+        "小売店名":   "ロフト",
+        "店舗名":     store_names,
         "ブランド名": brands,
-        "商品名":   product_names,
-        "売上数量": quantities,
-        "売上金額": amounts,
+        "商品名":     product_names,
+        "売上数量":   quantities,
+        "売上金額":   amounts,
     })
 
-    # 数量0・日付なしを除外
     result = result[result["売上数量"] > 0].dropna(subset=["日付"]).reset_index(drop=True)
     return result
 

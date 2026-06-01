@@ -120,7 +120,7 @@ def _load_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=5, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)
 def _cached_load(retailer: str) -> pd.DataFrame:
     try:
         return load_filtered(retailer=retailer)
@@ -128,7 +128,7 @@ def _cached_load(retailer: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=5, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)
 def _cached_summary(retailer: str) -> dict:
     # _cached_load を呼ばず直接 load_filtered を呼ぶ（ネストキャッシュ回避）
     try:
@@ -148,8 +148,8 @@ def _cached_summary(retailer: str) -> dict:
 
 
 def _clear_cache(retailer: str) -> None:
-    _cached_load.clear()
-    _cached_summary.clear()
+    """全キャッシュを確実にクリアする"""
+    st.cache_data.clear()  # Streamlit 全キャッシュをクリア（最も確実）
 
 
 # ═══════════════════════════════════════════════════════════════════════

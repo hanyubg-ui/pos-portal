@@ -21,6 +21,18 @@ st.set_page_config(
 if not check_password():
     st.stop()
 
+# 検索エンジンにインデックスさせない
+st.markdown("""
+<script>
+(function(){
+  var m = document.createElement('meta');
+  m.name = 'robots';
+  m.content = 'noindex, nofollow, noarchive';
+  document.head.appendChild(m);
+})();
+</script>
+""", unsafe_allow_html=True)
+
 st.markdown("""
 <style>
 /* カード全体 */

@@ -233,6 +233,74 @@ def _convert_loft_format(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def _is_hands_format(df: pd.DataFrame) -> bool:
+    """ハンズ形式（日別売上実績Excel）かどうかを判定する"""
+    return "ハンズ" in df.columns
+
+
+def _convert_hands_format(file_bytes: bytes) -> pd.DataFrame:
+    """ハンズの日別売上実績Excelを標準縦形式に変換する。
+    構造: 行0=ハンズ, 行3=集計期間, 行9=ヘッダー(No/商品名等), 行10〜=データ
+    col[7]=商品名, col[11]=全計売上数, col[12]=全計売上金額
+    """
+    import io as _io
+    import re
+    import unicodedata
+
+    df = pd.read_excel(_io.BytesIO(file_bytes), sheet_name=0, header=None, dtype=str)
+
+    # 集計期間から終了日を取得
+    date_str = "2026-01-31"  # デフォルト
+    for i in range(8):
+        for j in range(5):
+            cell = str(df.iloc[i, j]) if j < df.shape[1] else ""
+            dates = re.findall(r"(\d{4})年(\d{2})月(\d{2})日", cell)
+            if dates:
+                y, m, d = dates[-1]  # 終了日を使用
+                date_str = f"{y}-{m}-{d}"
+                break
+
+    # データ開始行: col[1]=="No" の次行
+    data_start = 10
+    for i in range(df.shape[0]):
+        if str(df.iloc[i, 1]).strip() == "No":
+            data_start = i + 1
+            break
+
+    records = []
+    for i in range(data_start, df.shape[0]):
+        product_raw = str(df.iloc[i, 7]) if df.shape[1] > 7 else ""
+        qty_raw     = str(df.iloc[i, 11]) if df.shape[1] > 11 else ""
+        amt_raw     = str(df.iloc[i, 12]) if df.shape[1] > 12 else ""
+
+        if product_raw in ("nan", ""):
+            continue
+        try:
+            qty = int(float(qty_raw)) if qty_raw not in ("nan", "", "_") else 0
+        except (ValueError, TypeError):
+            qty = 0
+        if qty <= 0:
+            continue
+        try:
+            amt = int(float(amt_raw)) if amt_raw not in ("nan", "", "_") else 0
+        except (ValueError, TypeError):
+            amt = 0
+
+        product_name = unicodedata.normalize("NFKC", product_raw.strip())
+        brand = _detect_brand(product_name)
+        records.append({
+            "日付":       date_str,
+            "小売店名":   "ハンズ",
+            "店舗名":     "ハンズ全店",
+            "ブランド名": brand,
+            "商品名":     product_name,
+            "売上数量":   qty,
+            "売上金額":   amt,
+        })
+
+    return pd.DataFrame(records)
+
+
 def _is_cosme_format(df: pd.DataFrame) -> bool:
     """アットコスメ形式（売上日付・品名・売上数 列を持つ）かどうかを判定する"""
     return "売上日付" in df.columns and "品名" in df.columns and "売上数" in df.columns

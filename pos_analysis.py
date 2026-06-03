@@ -44,6 +44,7 @@ def _load_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
         _is_loft_raw_format, _convert_loft_format,
         _is_plaza_raw_format, _convert_plaza_format,
         _is_cosme_format, _convert_cosme_format,
+        _is_hands_format, _convert_hands_format,
         REQUIRED_COLS,
     )
 
@@ -55,7 +56,10 @@ def _load_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
     if suffix in (".xlsx", ".xls"):
         df = pd.read_excel(_io.BytesIO(file_bytes), dtype=str)
         df.columns = [str(c).strip() for c in df.columns]
-        if _is_ainz_format(df):
+        if _is_hands_format(df):
+            # ハンズ形式: header=None で再読込して変換
+            df = _convert_hands_format(file_bytes)
+        elif _is_ainz_format(df):
             df = _convert_ainz_format(df, Path(filename))
         elif _is_cosme_format(df):
             df = _convert_cosme_format(df)

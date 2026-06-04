@@ -339,8 +339,10 @@ def load_filtered(
     """条件を指定してレコードを取得する"""
     if _get_github_config():
         if retailer and year_month:
-            # 特定月のファイルだけ読む（最速）
+            # 月別ファイルを優先、なければ全月ファイルを読んでフィルター
             df, _ = _gh_read_ym(retailer, year_month)
+            if df.empty:
+                df = _gh_load_retailer_all(retailer)
         elif retailer:
             df = _gh_load_retailer_all(retailer)
         else:
@@ -348,13 +350,16 @@ def load_filtered(
 
         if df.empty:
             return df
-        if retailer:
+        if "日付" in df.columns and not pd.api.types.is_datetime64_any_dtype(df["日付"]):
+            df["日付"] = pd.to_datetime(df["日付"], errors="coerce")
+        if retailer and "小売店名" in df.columns:
             df = df[df["小売店名"] == retailer]
         if year_month:
-            if "年月" not in df.columns:
+            if "年月" not in df.columns and "日付" in df.columns:
                 df["年月"] = df["日付"].dt.strftime("%Y-%m")
-            df = df[df["年月"] == year_month]
-        if brand:
+            if "年月" in df.columns:
+                df = df[df["年月"] == year_month]
+        if brand and "ブランド名" in df.columns:
             df = df[df["ブランド名"] == brand]
         return df.reset_index(drop=True)
 

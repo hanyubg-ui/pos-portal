@@ -241,8 +241,26 @@ def init_db(db_path: Path = DEFAULT_DB) -> None:
         _sqlite_init(db_path)
 
 
+def _is_monthly_summary(group_df: pd.DataFrame) -> bool:
+    """全行の日付が同一かつ月末日なら月次集計データと判定する（LFPOSMON等）"""
+    import calendar as _cal
+    if group_df.empty:
+        return False
+    try:
+        dates = pd.to_datetime(group_df["日付"]).dt.normalize()
+        if dates.nunique() != 1:
+            return False
+        d = dates.iloc[0]
+        return d.day == _cal.monthrange(d.year, d.month)[1]
+    except Exception:
+        return False
+
+
 def save_records(df: pd.DataFrame, db_path: Path = DEFAULT_DB) -> dict:
-    """DataFrame を DB に保存。月ごとに別ファイル。同月は上書き。"""
+    """DataFrame を DB に保存。月ごとに別ファイル。
+    ・日別データ（LFPO等）: 同一ブランドのみ上書き
+    ・月次集計データ（LFPOSMON等）: その月の全データを完全上書き（日別と重複しない）
+    """
     df = df.copy()
     df["年月"]    = df["日付"].dt.strftime("%Y-%m")
     df["登録日時"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -255,16 +273,19 @@ def save_records(df: pd.DataFrame, db_path: Path = DEFAULT_DB) -> dict:
             group = group.copy()
             existing_df, sha = _gh_read_ym(retailer, ym)
 
-            if not existing_df.empty:
-                # 同一（年月×ブランド×小売店）は上書き
+            if _is_monthly_summary(group):
+                # 月次集計データ → その月の全データを完全上書き（日別データも削除）
+                if not existing_df.empty:
+                    replaced.append(f"{ym} / 全データ / {retailer}（月次集計で上書き）")
+                merged = group
+            elif not existing_df.empty:
+                # 日別データ → 同一ブランドのみ上書き
                 brands_in_new = group["ブランド名"].unique().tolist()
-                mask = existing_df["ブランド名"].isin(brands_in_new)
-                if mask.any():
-                    for brand in brands_in_new:
-                        b_mask = (existing_df["ブランド名"] == brand)
-                        if b_mask.any():
-                            existing_df = existing_df[~b_mask]
-                            replaced.append(f"{ym} / {brand} / {retailer}")
+                for brand in brands_in_new:
+                    b_mask = existing_df["ブランド名"] == brand
+                    if b_mask.any():
+                        existing_df = existing_df[~b_mask]
+                        replaced.append(f"{ym} / {brand} / {retailer}")
                 merged = pd.concat([existing_df, group], ignore_index=True)
             else:
                 merged = group

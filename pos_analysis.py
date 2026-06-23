@@ -37,7 +37,7 @@ RETAILER_CONFIG: dict[str, dict] = {
 
 # ─── ユーティリティ ──────────────────────────────────────────────────
 
-def _load_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
+def _load_file(file_bytes: bytes, filename: str, month_override: str | None = None) -> pd.DataFrame:
     import io as _io
     from pos_report import (
         _is_ainz_format, _convert_ainz_format,
@@ -60,7 +60,7 @@ def _load_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
             # ハンズ形式: header=None で再読込して変換
             df = _convert_hands_format(file_bytes)
         elif _is_ainz_format(df):
-            df = _convert_ainz_format(df, Path(filename))
+            df = _convert_ainz_format(df, Path(filename), override_ym=month_override)
         elif _is_cosme_format(df):
             df = _convert_cosme_format(df)
         elif _is_plaza_raw_format(df):
@@ -99,7 +99,7 @@ def _load_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
             df = df_raw.iloc[1:].reset_index(drop=True)
             df.columns = headers
             if _is_ainz_format(df):
-                df = _convert_ainz_format(df, Path(filename))
+                df = _convert_ainz_format(df, Path(filename), override_ym=month_override)
             elif _is_plaza_raw_format(df):
                 df = _convert_plaza_format(df)
 
@@ -217,6 +217,26 @@ def render_retailer_page(retailer_name: str) -> None:
                 if res.get("replaced"):
                     st.warning("上書きしたデータ:\n" + "\n".join(f"• {r}" for r in res["replaced"]))
 
+        # アインズは日付列がないためアップロード時に月を指定させる
+        ainz_month_override = None
+        if retailer_name == "アインズ" and uploaded is not None:
+            import datetime as _dt
+            now = _dt.date.today()
+            # 直近6ヶ月の選択肢を生成
+            _month_opts = []
+            for i in range(6):
+                m = now.month - i
+                y = now.year
+                while m <= 0:
+                    m += 12; y -= 1
+                _month_opts.append(f"{y}-{m:02d}")
+            ainz_month_override = st.selectbox(
+                "対象月を選択（アインズはファイルに日付がないため必須）",
+                _month_opts,
+                format_func=lambda s: s.replace("-", "年") + "月",
+                key=f"ainz_ym_{retailer_name}",
+            )
+
         if uploaded is not None:
             st.caption(f"📎 {uploaded.name}  ({uploaded.size:,} bytes)")
             if st.button("💾 DBに保存する", type="primary",
@@ -226,7 +246,7 @@ def render_retailer_page(retailer_name: str) -> None:
                     try:
                         uploaded.seek(0)
                         file_bytes = uploaded.read()
-                        df_up = _load_file(file_bytes, uploaded.name)
+                        df_up = _load_file(file_bytes, uploaded.name, month_override=ainz_month_override)
                         df_this = df_up[df_up["小売店名"] == retailer_name]
                         result  = save_records(df_up)
                         import time as _time; _time.sleep(2)  # GitHub反映待ち

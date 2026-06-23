@@ -106,16 +106,20 @@ def _is_ainz_format(df: pd.DataFrame) -> bool:
     return any(store_re.match(str(c)) for c in df.columns)
 
 
-def _convert_ainz_format(df: pd.DataFrame, filepath: "Path") -> pd.DataFrame:
-    """アインズの商品×店舗クロス集計を標準縦形式に変換する"""
+def _convert_ainz_format(df: pd.DataFrame, filepath: "Path", override_ym: str | None = None) -> pd.DataFrame:
+    """アインズの商品×店舗クロス集計を標準縦形式に変換する。
+    override_ym: "YYYY-MM" 形式で月を直接指定（指定時はファイル名を無視）"""
     import unicodedata, calendar as _cal
 
-    # ファイル名から月・年を推定
-    stem = filepath.stem
-    month_m = re.search(r'(\d+)月', stem)
-    year_m  = re.search(r'(20\d{2})', stem)
-    month = int(month_m.group(1)) if month_m else pd.Timestamp.now().month
-    year  = int(year_m.group(1))  if year_m  else pd.Timestamp.now().year
+    if override_ym:
+        year, month = int(override_ym[:4]), int(override_ym[5:7])
+    else:
+        # ファイル名から月・年を推定
+        stem = filepath.stem
+        month_m = re.search(r'(\d+)月', stem)
+        year_m  = re.search(r'(20\d{2})', stem)
+        month = int(month_m.group(1)) if month_m else pd.Timestamp.now().month
+        year  = int(year_m.group(1))  if year_m  else pd.Timestamp.now().year
     last_day = _cal.monthrange(year, month)[1]
     date_str = f"{year}-{month:02d}-{last_day:02d}"
 
